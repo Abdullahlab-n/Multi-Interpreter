@@ -1,0 +1,53 @@
+// Master Arduino (VGC Controller)
+#include <Wire.h>
+
+#define SLAVE_ADDR 8
+
+// Memory zones
+int R_zone[50];  // rarely used
+int G_zone[50];  // frequently used
+int B_zone[50];  // mid usage
+
+// Index trackers
+int rIndex = 0, gIndex = 0, bIndex = 0;
+
+void setup() {
+  Wire.begin(); // join I2C as master
+  Serial.begin(9600);
+  Serial.println("Master VGC Started...");
+}
+
+// Simulate allocation based on usage criteria
+void allocateObject(int obj, char zone) {
+  if (zone == 'R' && rIndex < 50) {
+    R_zone[rIndex++] = obj;
+    Serial.print("Stored "); Serial.print(obj); Serial.println(" in R zone");
+  }
+  else if (zone == 'G' && gIndex < 50) {
+    G_zone[gIndex++] = obj;
+    Serial.print("Stored "); Serial.print(obj); Serial.println(" in G zone");
+  }
+  else if (zone == 'B' && bIndex < 50) {
+    B_zone[bIndex++] = obj;
+    Serial.print("Stored "); Serial.print(obj); Serial.println(" in B zone");
+  }
+}
+
+// Send memory usage to Slave
+void sendMemoryUsage() {
+  Wire.beginTransmission(SLAVE_ADDR);
+  Wire.write(rIndex); // count of objects in R
+  Wire.write(gIndex); // count of objects in G
+  Wire.write(bIndex); // count of objects in B
+  Wire.endTransmission();
+}
+
+void loop() {
+  // Example simulation
+  allocateObject(50, 'R'); // Rarely used
+  allocateObject(75, 'G'); // Frequently used
+  allocateObject(100, 'B'); // Mid usage
+  
+  sendMemoryUsage();
+  delay(2000);
+}
