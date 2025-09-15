@@ -1,0 +1,31 @@
+// Slave Arduino (VGC Memory Reporter)
+#include <Wire.h>
+
+#define SLAVE_ADDR 8
+
+int rCount = 0, gCount = 0, bCount = 0;
+
+void setup() {
+  Wire.begin(SLAVE_ADDR);
+  Wire.onReceive(receiveEvent);
+  Serial.begin(9600);
+  Serial.println("Slave VGC Reporter Started...");
+}
+
+void loop() {
+  // Display memory usage every 2s
+  Serial.print("R Zone: "); Serial.print(rCount * sizeof(int)); Serial.println(" bytes");
+  Serial.print("G Zone: "); Serial.print(gCount * sizeof(int)); Serial.println(" bytes");
+  Serial.print("B Zone: "); Serial.print(bCount * sizeof(int)); Serial.println(" bytes");
+  Serial.println("-----------------------");
+  delay(2000);
+}
+
+// Receive data from Master
+void receiveEvent(int howMany) {
+  if (howMany >= 3) {
+    rCount = Wire.read();
+    gCount = Wire.read();
+    bCount = Wire.read();
+  }
+}
