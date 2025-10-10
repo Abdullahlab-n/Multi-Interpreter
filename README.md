@@ -175,7 +175,7 @@ Here’s a short and precise note you can put in your GitHub report 👇
 
 ---
 
-###  VGC Benchmark Summary
+###  VGC Benchmark version 1.75 Summary
 
 * **Memory Consumption:**
   VGC reserved **~1.5 MB**, but actually **used only ~7.6 KB**, which is about **10× less memory** than Python’s GIL-based GC for the same task.
