@@ -155,7 +155,7 @@ This mimics *hardware logic decision-making*, reducing software-level conditiona
 
 ## Integration Potential
 
-VGC 2.0 is designed to integrate seamlessly with:
+VGC 2.0 is designed to integrate seamlessly with: (still not integrated testing stage)
 
 * **JIT / AOT compilers** for runtime optimization.
 * **SIMD / WASM backends** for multi-core parallelism.
