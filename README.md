@@ -3,7 +3,7 @@
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Virtual Garbage Collector (actual prototype) version 1.0 a garbage collector for python 
-# (*by Abdulla M*)
+# *by Abdulla M*
 As a initial stage i have built a prototype VGC memory model which will runs in arduino uno (stage-1 proto-type) 
 aims to use memory based on the object type which enables frequent access of an object and reduce memory fragmentation focus on increase in frequent usage of object (reusability) and with a few intergration of functions like JIT/AOT SIMD,WASM attaining maximum features along with performance if the device is capable to run CUDA the user can also intergrate that at VGC memory model  
 
