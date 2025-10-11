@@ -1,0 +1,240 @@
+#include <iostream>
+#include <vector>
+#include <deque>
+#include <memory>
+#include <string>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <random>
+#include <chrono>
+#include <algorithm>
+
+using namespace std;
+using steady_clock = chrono::steady_clock;
+
+struct Obj {
+    int id;
+    int size;
+    atomic<int> accesses;
+    string kind;
+    Obj(int i = 0, int s = 0, const string &k = "") : id(i), size(s), accesses(0), kind(k) {}
+};
+
+// Human-readable memory
+string hr(size_t bytes) {
+    double b = (double)bytes;
+    const char* suf[] = {"B","KB","MB","GB"};
+    int i = 0;
+    while(b >= 1024.0 && i < 3) { b /= 1024.0; ++i; }
+    char buf[64];
+    snprintf(buf,sizeof(buf),"%.2f %s",b,suf[i]);
+    return string(buf);
+}
+
+// ---------- VGC Simulator ----------
+struct Zone {
+    string name;
+    size_t capacity;
+    size_t used;
+    deque<shared_ptr<Obj>> queue;
+    mutex mtx;
+    Zone(string n="", size_t cap=0) : name(n), capacity(cap), used(0) {}
+
+    bool canAllocate(size_t s){ return used + s <= capacity; }
+
+    void allocate(shared_ptr<Obj> o){ queue.push_back(o); used += o->size; }
+
+    shared_ptr<Obj> recycle(size_t sz){
+        lock_guard<mutex> lg(mtx);
+        for(auto it = queue.begin(); it != queue.end(); ++it){
+            if((*it)->accesses.load() == 0 && (*it)->size >= sz){
+                used -= (*it)->size;
+                auto obj = *it;
+                queue.erase(it);
+                return obj;
+            }
+        }
+        return nullptr;
+    }
+
+    void freeOldest(){
+        lock_guard<mutex> lg(mtx);
+        if(!queue.empty()){
+            used -= queue.front()->size;
+            queue.pop_front();
+        }
+    }
+
+    void cleanUpRed(){
+        lock_guard<mutex> lg(mtx);
+        while(!queue.empty() && queue.front()->accesses.load() == 0){
+            used -= queue.front()->size;
+            queue.pop_front();
+        }
+    }
+};
+
+struct VGCSimulator {
+    Zone R,G,B;
+    atomic<int> nextId{1};
+    atomic<size_t> promotions{0};
+    atomic<size_t> evictions{0};
+    atomic<size_t> peak_total{0};
+
+    VGCSimulator(size_t rc, size_t gc, size_t bc) : R("R",rc), G("G",gc), B("B",bc) {}  
+
+    Zone* chooseZone(const string &kind){
+        if(kind=="loop" || kind=="hot") return &G;
+        if(kind=="recursion" || kind=="heavy") return &R;
+        return &B;
+    }
+
+    shared_ptr<Obj> makeObject(int id, int sz, const string &kind){
+        Zone *z = chooseZone(kind);
+
+        // Try to recycle first
+        auto recycled = B.recycle(sz);
+        if(recycled) {
+            recycled->id = id;
+            recycled->kind = kind;
+            recycled->accesses = 0;
+            z->allocate(recycled);
+            updatePeak();
+            return recycled;
+        }
+
+        while(true){
+            {  
+                lock_guard<mutex> lg(z->mtx);  
+                if(z->canAllocate(sz)){  
+                    auto o = make_shared<Obj>(id,sz,kind);  
+                    z->allocate(o);  
+                    updatePeak();  
+                    return o;  
+                }  
+            }
+
+            // eviction priority: R -> B -> G
+            bool freed = false;
+            R.cleanUpRed(); if(R.used + sz <= R.capacity) { freed = true; }
+            if(freed) continue;
+
+            { lock_guard<mutex> lg(B.mtx); if(!B.queue.empty()){ B.used -= B.queue.front()->size; B.queue.pop_front(); evictions++; freed = true; } }  
+            if(freed) continue;  
+            { lock_guard<mutex> lg(G.mtx); if(!G.queue.empty()){ G.used -= G.queue.front()->size; G.queue.pop_front(); evictions++; freed = true; } }  
+            if(freed) continue;
+
+            // forcibly place in B if possible
+            lock_guard<mutex> lg(B.mtx);  
+            if(B.capacity >= sz){ auto o = make_shared<Obj>(id,sz,kind); B.allocate(o); updatePeak(); return o; }  
+            return nullptr;
+        }
+    }
+
+    void access(shared_ptr<Obj> o){
+        int a = o->accesses.fetch_add(1) + 1;
+        if(a==5) promoteToG(o);
+    }
+
+    void promoteToG(shared_ptr<Obj> o){
+        auto promoteFromZone = [&](Zone &fromZone){
+            lock_guard<mutex> lg(fromZone.mtx);
+            auto it = find_if(fromZone.queue.begin(), fromZone.queue.end(), [&](shared_ptr<Obj> &obj){ return obj->id == o->id; });
+            if(it != fromZone.queue.end()){
+                ensureSpaceInG(o->size);
+                fromZone.used -= o->size;
+                {
+                    lock_guard<mutex> lgG(G.mtx);
+                    G.allocate(o);
+                }
+                fromZone.queue.erase(it);
+                promotions++;
+                updatePeak();
+            }
+        };
+
+        promoteFromZone(R);
+        promoteFromZone(B);
+    }
+
+    bool ensureSpaceInG(size_t sz){
+        while(true){
+            { lock_guard<mutex> lgG(G.mtx); if(G.canAllocate(sz)) return true; }
+            bool freed=false;
+            R.cleanUpRed(); if(G.canAllocate(sz)) return true;
+            { lock_guard<mutex> lgB(B.mtx); if(!B.queue.empty()){ B.used -= B.queue.front()->size; B.queue.pop_front(); evictions++; freed=true; } }
+            if(freed) continue;
+            { lock_guard<mutex> lgR(R.mtx); if(!R.queue.empty()){ R.used -= R.queue.front()->size; R.queue.pop_front(); evictions++; freed=true; } }
+            if(!freed) return false;
+        }
+    }
+
+    size_t totalUsed(){ return R.used + G.used + B.used; }
+
+    void updatePeak(){
+        size_t total = totalUsed();
+        size_t prev = peak_total.load();
+        while(total>prev && !peak_total.compare_exchange_weak(prev,total)) {}
+    }
+};
+
+// ----------- Benchmark -------------
+struct Config{
+    int numLoopObjs=5000;
+    int numRecObjs=200;
+    int numStrObjs=2000;
+    int accessThreads=8;
+    int accessOpsPerThread=20000;
+    size_t zoneCap=2*1024*1024; // 2 MB per zone
+};
+
+vector<tuple<int,int,string>> build_object_catalog(const Config &cfg){
+    vector<tuple<int,int,string>> cat;
+    int id=1;
+    for(int i=0;i<cfg.numLoopObjs;i++) cat.emplace_back(id++,32,"loop");
+    for(int i=0;i<cfg.numRecObjs;i++) cat.emplace_back(id++,1024,"recursion");
+    for(int i=0;i<cfg.numStrObjs;i++) cat.emplace_back(id++,256,"string");
+    return cat;
+}
+
+void run_vgc_benchmark(const Config &cfg){
+    cout << "=== VGC Simulator ===\n";
+    VGCSimulator sim(cfg.zoneCap, cfg.zoneCap, cfg.zoneCap);
+    auto catalog = build_object_catalog(cfg);
+
+    vector<shared_ptr<Obj>> objs; objs.reserve(catalog.size());
+    for(auto &t : catalog){
+        int id,sz; string k; tie(id,sz,k)=t;
+        objs.push_back(sim.makeObject(id,sz,k));
+    }
+
+    auto worker = [&](int seed){
+        mt19937 rng(seed); uniform_int_distribution<size_t> dist(0, objs.size()-1);
+        for(int i=0;i<cfg.accessOpsPerThread;i++){
+            size_t idx = dist(rng);
+            if(objs[idx]) sim.access(objs[idx]);
+        }
+    };
+
+    auto t0 = steady_clock::now();
+    vector<thread> thr;
+    for(int i=0;i<cfg.accessThreads;i++) thr.emplace_back(worker, 2000+i);
+    for(auto &t: thr) t.join();
+    auto t1 = steady_clock::now();
+
+    cout << "Time: " << chrono::duration<double>(t1-t0).count() << " s\n";
+    cout << "Total live memory: " << hr(sim.totalUsed()) << " (" << sim.totalUsed() << " bytes)\n";
+    cout << "Peak memory: " << hr(sim.peak_total.load()) << " (" << sim.peak_total.load() << " bytes)\n";
+    cout << "Promotions: " << sim.promotions.load() << "\n";
+    cout << "Evictions: " << sim.evictions.load() << "\n";
+    cout << "Done VGC sim\n";
+}
+
+int main(){
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cout << "VGC Simulation Benchmark\n\n";
+    Config cfg;
+    run_vgc_benchmark(cfg);
+    return 0;
+}
