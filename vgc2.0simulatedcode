@@ -1,0 +1,224 @@
+//virtual garbage collector 2.0 code and output 
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <unordered_map>
+#include <string>
+#include <cstdlib>
+
+using namespace std;
+
+// === Object Structure ===
+struct Obj {
+    int id;
+    size_t size;
+    string kind;
+    string zone;
+    Obj(int i, size_t s, string k, string z = "")
+        : id(i), size(s), kind(std::move(k)), zone(std::move(z)) {}
+};
+
+// === Zone Class ===
+class Zone {
+public:
+    string name;
+    size_t capacity;
+    size_t used;
+    vector<shared_ptr<Obj>> queue;
+
+    Zone(string n, size_t c)
+        : name(std::move(n)), capacity(c), used(0) {
+        cout << "Initializing Zone " << name << " with capacity=" << capacity << endl;
+        cout.flush();
+    }
+
+    bool canAllocate(size_t s) {
+        bool ok = (used + s <= capacity);
+        cout << "Zone " << name << ": canAllocate(" << s << ") = " << (ok ? "true" : "false")
+             << ", used=" << used << ", capacity=" << capacity << endl;
+        cout.flush();
+        return ok;
+    }
+
+    bool allocate(const shared_ptr<Obj> &o) {
+        if (canAllocate(o->size)) {
+            used += o->size;
+            queue.push_back(o);
+            cout << "Zone " << name << ": Allocated Obj id=" << o->id << " size=" << o->size << endl;
+            cout.flush();
+            return true;
+        }
+        return false;
+    }
+
+    bool recycleCandidate(size_t s) {
+        cout << "Zone " << name << ": Entering recycleCandidate for size=" << s << endl;
+        cout.flush();
+        if (queue.empty()) {
+            cout << "Zone " << name << ": No recyclable candidate found for size=" << s << endl;
+            cout.flush();
+            return false;
+        }
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if ((*it)->size == s) {
+                used -= (*it)->size;
+                cout << "Zone " << name << ": Recycled Obj id=" << (*it)->id << endl;
+                cout.flush();
+                queue.erase(it);
+                return true;
+            }
+        }
+        cout << "Zone " << name << ": No matching size found for recycle" << endl;
+        cout.flush();
+        return false;
+    }
+
+    void summary() {
+        cout << "Zone " << name << " => Used: " << used << "/" << capacity
+             << " | Active Objects: " << queue.size() << endl;
+        cout.flush();
+    }
+};
+
+// === Virtual Garbage Collector (VGC) ===
+class VGC {
+public:
+    Zone R, G, B;
+    unordered_map<int, shared_ptr<Obj>> catalog;
+
+    VGC(size_t capR, size_t capG, size_t capB)
+        : R("R", capR), G("G", capG), B("B", capB) {
+        cout << "VGC: Initialized with R.cap=" << capR
+             << ", G.cap=" << capG << ", B.cap=" << capB << endl;
+        cout.flush();
+    }
+
+    void buildCatalog() {
+        cout << "VGC: Entering buildCatalog" << endl;
+        cout.flush();
+        catalog[1] = make_shared<Obj>(1, 32, "loop");
+        catalog[2] = make_shared<Obj>(2, 128, "data");
+        cout << "VGC: Exiting buildCatalog with " << catalog.size() << " objects" << endl;
+        cout.flush();
+    }
+
+    void makeObject(int id) {
+        if (catalog.find(id) == catalog.end()) {
+            cout << "VGC: Object id=" << id << " not found in catalog" << endl;
+            cout.flush();
+            return;
+        }
+
+        auto obj = catalog[id];
+        cout << "VGC: Attempting allocation for id=" << id << endl;
+        cout << "VGC: Entering makeObject for id=" << id << ", size=" << obj->size << ", kind=" << obj->kind << endl;
+        cout.flush();
+
+        if (!B.recycleCandidate(obj->size))
+            if (!R.recycleCandidate(obj->size))
+                if (G.canAllocate(obj->size)) {
+                    G.allocate(obj);
+                    obj->zone = "G";
+                }
+    }
+
+    void releaseObject(int id) {
+        if (catalog.find(id) == catalog.end()) return;
+        auto &obj = catalog[id];
+        cout << "VGC: Releasing Obj id=" << id << " from zone=" << obj->zone << endl;
+        cout.flush();
+        if (obj->zone == "G") {
+            G.recycleCandidate(obj->size);
+            obj->zone = "R";
+            R.allocate(obj);
+        }
+    }
+
+    void simulate() {
+        cout << "\nAllocating objects..." << endl;
+        cout.flush();
+        for (auto &kv : catalog) makeObject(kv.first);
+
+        cout << "\nReleasing and recycling objects..." << endl;
+        cout.flush();
+        for (auto &kv : catalog) releaseObject(kv.first);
+
+        cout << "\nFinal Summary:" << endl;
+        cout.flush();
+        R.summary();
+        G.summary();
+        B.summary();
+    }
+};
+
+// === Main Entry Point ===
+int main() {
+    cout << "\033[1;32mVGC Simulation Benchmark\033[0m" << endl;
+    cout << "\n=== VGC Simulator ===" << endl;
+    cout.flush();
+
+    VGC vgc(524288, 524288, 524288);
+    vgc.buildCatalog();
+    vgc.simulate();
+
+    cout << "\n=== Simulation Completed Successfully ===" << endl;
+    cout.flush();
+    return 0;
+}
+
+      ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/*/
+ output: 
+ [?2004l
+[1;32mVGC Simulation Benchmark[0m
+
+=== VGC Simulator ===
+Initializing Zone R with capacity=524288
+Initializing Zone G with capacity=524288
+Initializing Zone B with capacity=524288
+VGC: Initialized with R.cap=524288, G.cap=524288, B.cap=524288
+VGC: Entering buildCatalog
+VGC: Exiting buildCatalog with 2 objects
+
+Allocating objects...
+VGC: Attempting allocation for id=2
+VGC: Entering makeObject for id=2, size=128, kind=data
+Zone B: Entering recycleCandidate for size=128
+Zone B: No recyclable candidate found for size=128
+Zone R: Entering recycleCandidate for size=128
+Zone R: No recyclable candidate found for size=128
+Zone G: canAllocate(128) = true, used=0, capacity=524288
+Zone G: canAllocate(128) = true, used=0, capacity=524288
+Zone G: Allocated Obj id=2 size=128
+VGC: Attempting allocation for id=1
+VGC: Entering makeObject for id=1, size=32, kind=loop
+Zone B: Entering recycleCandidate for size=32
+Zone B: No recyclable candidate found for size=32
+Zone R: Entering recycleCandidate for size=32
+Zone R: No recyclable candidate found for size=32
+Zone G: canAllocate(32) = true, used=128, capacity=524288
+Zone G: canAllocate(32) = true, used=128, capacity=524288
+Zone G: Allocated Obj id=1 size=32
+
+Releasing and recycling objects...
+VGC: Releasing Obj id=2 from zone=G
+Zone G: Entering recycleCandidate for size=128
+Zone G: Recycled Obj id=2
+Zone R: canAllocate(128) = true, used=0, capacity=524288
+Zone R: Allocated Obj id=2 size=128
+VGC: Releasing Obj id=1 from zone=G
+Zone G: Entering recycleCandidate for size=32
+Zone G: Recycled Obj id=1
+Zone R: canAllocate(32) = true, used=128, capacity=524288
+Zone R: Allocated Obj id=1 size=32
+
+Final Summary:
+Zone R => Used: 160/524288 | Active Objects: 2
+Zone G => Used: 0/524288 | Active Objects: 0
+Zone B => Used: 0/524288 | Active Objects: 0
+
+=== Simulation Completed Successfully ===
+[?2004h
+ 
+      /*/
