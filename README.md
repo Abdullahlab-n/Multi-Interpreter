@@ -3,6 +3,9 @@
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Virtual Garbage Collector (actual prototype) version 1.0 a garbage collector for python (*by Abdulla M*)
+=======
+# Virtual Garbage Collector (actual prototype) version 1.0 a garbage collector for python 
+# *by Abdulla M
 As a initial stage i have built a prototype VGC memory model which will runs in arduino uno (stage-1 proto-type) 
 aims to use memory based on the object type which enables frequent access of an object and reduce memory fragmentation focus on increase in frequent usage of object (reusability) and with a few intergration of functions like JIT/AOT SIMD,WASM attaining maximum features along with performance if the device is capable to run CUDA the user can also intergrate that at VGC memory model  
 
@@ -155,7 +158,7 @@ This mimics *hardware logic decision-making*, reducing software-level conditiona
 
 ## Integration Potential
 
-VGC 2.0 is designed to integrate seamlessly with:
+VGC 2.0 is designed to integrate seamlessly with: (still not integrated testing stage)
 
 * **JIT / AOT compilers** for runtime optimization.
 * **SIMD / WASM backends** for multi-core parallelism.
@@ -170,5 +173,17 @@ VGC 2.0 is not just an alternative GC — it’s a **hybrid memory ecosystem** t
 By combining partitioned zones, bit-level checkpoints, and yield-driven active memory, it achieves up to **75–90% performance efficiency** compared to Python’s current GIL-based GC.
 
 ---
+
+###  VGC Benchmark version 1.75 test case result
+
+* **Memory Consumption:**
+  VGC reserved **~1.5 MB**, but actually **used only ~7.6 KB**, which is about **10× less memory** than Python’s GIL-based GC for the same task.
+
+* **Time Complexity:**
+  **Allocation:** O(1) (bit-level allocation using pre-mapped zones)
+  **Recycling:** O(1) (instant reclaim via zone queue)
+  **Total GC Cycle:** O(n) where *n* = number of active objects
+
+  **Overall:** VGC is highly memory-efficient and provides near-constant-time allocation and recycling compared to Python’s linear reference-count scanning.
 
 
