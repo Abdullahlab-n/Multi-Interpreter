@@ -201,7 +201,7 @@ This approach minimizes main memory contention and allows **parallel background 
 
 Instead of frequent traversal, VGC 2.0 uses **logic-gate conditions** (AND, OR, XOR) on bitfields to decide:
 
-* Whether an object stays, moves, or is evicted.
+* Whether an object stays, or evicted(expired).
 * Whether a zone should wake or remain idle.
 
 This mimics *hardware logic decision-making*, reducing software-level conditional overhead.
