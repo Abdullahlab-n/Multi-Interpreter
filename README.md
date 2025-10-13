@@ -55,7 +55,7 @@ The **Virtual Garbage Collector (VGC)** is a dynamic and intelligent memory mana
 It classifies, allocates, and manages memory based on **object usage frequency, task complexity**, and **runtime activity** through multi-zone partitioning and bit-level checkpoint control.
 
 ---
-                                                 VGC 2.0 Architecture:
+                          VGC 2.0 Architecture:
 <img width="576" height="876" alt="image" src="https://github.com/user-attachments/assets/1533141a-b6c6-4fdc-926a-32db2cfb5e81" />
 
 
