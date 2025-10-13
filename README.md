@@ -32,10 +32,13 @@ First image = Zone Creation & initial allocation of memory to R, G, B zones
 Second image = workload classification & dynamic object storage simulation 
 <img width="773" height="344" alt="Screenshot 2025-09-15 151542" src="https://github.com/user-attachments/assets/c11ba6f9-0bd0-4fe8-95d3-a9de83631216" />
 
+
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## Keynote:
 since i have developed the VGC version the old version become outdated (version 1.0 version 1.5 are become outdated)
 current version is VGC 2.0 
+
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Virtual Garbage Collector (VGC) — Enhanced Version 2.0
