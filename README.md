@@ -103,11 +103,11 @@ Object slots = 4096 (each slot = 64 bytes)
 Then each object is represented by 1 bit in a Checkpoint Field
 
 Example:
-|Obj ID	| Field Byte | Index	Bit |pos status             
-                             
- Obj 1	       0	          0     	    1 (active)
- Obj 2	       0	          1     	    0 (released)
- Obj 3	       0          	2	         1 (active)
+| Obj ID | Field Byte | Index Bit | Position Status |
+|--------|------------|-----------|----------------|
+| Obj 1  | 0          | 0         | 1 (active)     |
+| Obj 2  | 0          | 1         | 0 (released)   |
+| Obj 3  | 0          | 2         | 1 (active)     |
 
 The CFT looks like this (in binary):
 0b10100000...
