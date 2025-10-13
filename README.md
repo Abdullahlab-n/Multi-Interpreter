@@ -114,6 +114,8 @@ The CFT looks like this (in binary):
 
 Each 1 means “object is reachable or checkpointed as active.”
 
+If a checkpoint bit = 0 across all fields for a given object → it’s unreachable.
+
 ## How It Replaces Refcount:
 
 Instead of maintaining a per-object integer counter:
