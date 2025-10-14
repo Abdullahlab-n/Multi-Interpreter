@@ -318,7 +318,7 @@ int main(){
     return 0;
 }
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
-output:                                                         //Key Important Note is this test run Without JIT / AOT Optimisaction 
+output:                                                         //Key Important Note this test run Without JIT / AOT Optimisaction 
 VGC 32-byte aligned simulation (single-node demo)
 
 == Loop workload: 10000 iterations ==
