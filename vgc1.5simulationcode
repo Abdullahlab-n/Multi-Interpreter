@@ -1,0 +1,431 @@
+#include <iostream>
+#include <vector>
+#include <deque>
+#include <memory>
+#include <string>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <random>
+#include <chrono>
+#include <iomanip>
+#include <algorithm>
+
+using namespace std;
+using steady_clock = chrono::steady_clock;
+
+// -------------------- Object --------------------
+struct Obj {
+    int id;
+    int size;
+    atomic<int> accesses;
+    atomic<uint8_t> checkpoint;
+    uint8_t zoneBits : 3;
+    int bitAddr;
+    string kind;
+
+    Obj(int i=0, int s=0, const string &k="") 
+        : id(i), size(s), accesses(0), checkpoint(0), zoneBits(0), bitAddr(-1), kind(k) {}
+};
+
+// -------------------- Helpers --------------------
+string hr(size_t bytes) {
+    double b = (double)bytes;
+    const char* suf[] = {"B", "KB", "MB", "GB"};
+    int i = 0;
+    while (b >= 1024.0 && i < 3) { b /= 1024.0; ++i; }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.2f %s", b, suf[i]);
+    return string(buf);
+}
+
+// -------------------- Zone --------------------
+struct Zone {
+    string name;
+    size_t capacity;
+    size_t used;
+    deque<shared_ptr<Obj>> queue;
+    vector<bool> bitMap;
+    mutex mtx;
+
+    Zone(string n="", size_t cap=0) : name(n), capacity(cap), used(0) {
+        cout << "Initializing Zone " << n << " with capacity=" << cap << ", bitMap size=" << cap / 32 << "\n" << flush;
+        bitMap.resize(cap / 32, false);
+    }
+
+    bool canAllocate(size_t s) { 
+        bool can = used + s <= capacity;
+        cout << "Zone " << name << ": canAllocate(" << s << ") = " << (can ? "true" : "false")
+             << ", used=" << used << ", capacity=" << capacity << "\n" << flush;
+        return can;
+    }
+
+    int assignBitAddress(shared_ptr<Obj> o) {
+        cout << "Zone " << name << ": assignBitAddress for Obj id=" << o->id << "\n" << flush;
+        for (size_t i = 0; i < bitMap.size(); i++) {
+            if (!bitMap[i]) { 
+                bitMap[i] = true; 
+                o->bitAddr = i; 
+                cout << "Assigned bitAddr=" << i << " to Obj id=" << o->id << "\n" << flush;
+                return i; 
+            }
+        }
+        cout << "Zone " << name << ": No bit address available for Obj id=" << o->id << "\n" << flush;
+        return -1;
+    }
+
+    void freeBitAddress(int addr) { 
+        if (addr >= 0 && addr < (int)bitMap.size()) {
+            bitMap[addr] = false;
+            cout << "Zone " << name << ": Freed bitAddr=" << addr << "\n" << flush;
+        }
+    }
+
+    void allocate(shared_ptr<Obj> o) {
+        cout << "Zone " << name << ": Entering allocate for Obj id=" << o->id << "\n" << flush;
+        lock_guard<mutex> lg(mtx);
+        queue.push_back(o);
+        used += o->size;
+        int addr = assignBitAddress(o);
+        if (addr == -1) {
+            cout << "Zone " << name << ": Error: No bit address available for Obj id=" << o->id << "\n" << flush;
+            queue.pop_back();
+            used -= o->size;
+            return;
+        }
+        if (name == "R") o->zoneBits = 1;
+        else if (name == "G") o->zoneBits = 2;
+        else if (name == "B") o->zoneBits = 4;
+        o->checkpoint.store(1);
+        cout << "Zone " << name << ": Allocated Obj id=" << o->id << " size=" << o->size 
+             << " bitAddr=" << o->bitAddr << "\n" << flush;
+    }
+
+    shared_ptr<Obj> evictOldest() {
+        cout << "Zone " << name << ": Entering evictOldest\n" << flush;
+        lock_guard<mutex> lg(mtx);
+        if (queue.empty()) {
+            cout << "Zone " << name << ": No objects to evict\n" << flush;
+            return nullptr;
+        }
+        auto o = queue.front(); 
+        queue.pop_front();
+        used -= o->size;
+        freeBitAddress(o->bitAddr);
+        o->checkpoint.store(0);
+        cout << "Zone " << name << ": Evicted Obj id=" << o->id << "\n" << flush;
+        return o;
+    }
+
+    shared_ptr<Obj> recycleCandidate(size_t sz) {
+        cout << "Zone " << name << ": Entering recycleCandidate for size=" << sz << "\n" << flush;
+        lock_guard<mutex> lg(mtx);
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if ((*it)->checkpoint.load() == 0 && (size_t)(*it)->size >= sz) {
+                auto obj = *it;
+                used -= obj->size;
+                freeBitAddress(obj->bitAddr);
+                queue.erase(it);
+                obj->checkpoint.store(0);
+                cout << "Zone " << name << ": Recycled Obj id=" << obj->id << "\n" << flush;
+                return obj;
+            }
+        }
+        cout << "Zone " << name << ": No recyclable candidate found for size=" << sz << "\n" << flush;
+        return nullptr;
+    }
+
+    size_t cleanIdleFront() {
+        cout << "Zone " << name << ": Entering cleanIdleFront\n" << flush;
+        lock_guard<mutex> lg(mtx);
+        size_t freed = 0;
+        while (!queue.empty() && queue.front()->checkpoint.load() == 0) {
+            auto o = queue.front();
+            freed += o->size;
+            freeBitAddress(o->bitAddr);
+            used -= o->size;
+            queue.pop_front();
+            cout << "Zone " << name << ": Cleaned idle Obj id=" << o->id << "\n" << flush;
+        }
+        cout << "Zone " << name << ": Freed " << freed << " bytes\n" << flush;
+        return freed;
+    }
+};
+
+// -------------------- VGC --------------------
+struct VGC {
+    Zone R, G, B;
+    atomic<size_t> promotions{0};
+    atomic<size_t> evictions{0};
+    atomic<size_t> peak_total{0};
+
+    VGC(size_t rc, size_t gc, size_t bc) : R("R", rc), G("G", gc), B("B", bc) {
+        cout << "VGC: Initialized with R.cap=" << rc << ", G.cap=" << gc << ", B.cap=" << bc << "\n" << flush;
+    }
+
+    Zone* chooseZone(const string &kind) {
+        if (kind == "loop" || kind == "hot") return &G;
+        if (kind == "recursion" || kind == "heavy") return &R;
+        return &B;
+    }
+
+    shared_ptr<Obj> makeObject(int id, int sz, const string &kind) {
+        cout << "VGC: Entering makeObject for id=" << id << ", size=" << sz << ", kind=" << kind << "\n" << flush;
+        Zone* z = chooseZone(kind);
+        shared_ptr<Obj> rec = B.recycleCandidate(sz);
+        if (!rec) rec = R.recycleCandidate(sz);
+        if (rec) {
+            cout << "VGC: Reusing recycled Obj id=" << rec->id << "\n" << flush;
+            rec->id = id; 
+            rec->size = sz; 
+            rec->kind = kind; 
+            rec->accesses.store(0);
+            rec->checkpoint.store(0);
+            z->allocate(rec);
+            if (rec->bitAddr != -1) { // Check if allocation succeeded
+                updatePeak();
+                cout << "VGC: Successfully reused Obj id=" << id << "\n" << flush;
+                return rec;
+            }
+            cout << "VGC: Failed to reuse Obj id=" << id << "\n" << flush;
+            return nullptr;
+        }
+
+        int max_attempts = 10;
+        int attempt = 0;
+        while (attempt++ < max_attempts) {
+            {
+                lock_guard<mutex> lg(z->mtx);
+                if (z->canAllocate(sz)) {
+                    auto o = make_shared<Obj>(id, sz, kind);
+                    z->allocate(o);
+                    if (o->bitAddr != -1) { // Check if allocation succeeded
+                        updatePeak();
+                        cout << "VGC: Successfully allocated Obj id=" << id << "\n" << flush;
+                        return o;
+                    }
+                    cout << "VGC: Allocation failed for Obj id=" << id << "\n" << flush;
+                    return nullptr;
+                }
+            }
+            cout << "VGC: Attempt " << attempt << ": Cleaning idle objects\n" << flush;
+            size_t freedR = R.cleanIdleFront(); 
+            size_t freedB = B.cleanIdleFront(); 
+            size_t freedG = G.cleanIdleFront();
+            cout << "VGC: Freed " << freedR << " bytes from R, " << freedB << " from B, " << freedG << " from G\n" << flush;
+            bool freed = false;
+            {
+                lock_guard<mutex> lg(B.mtx);
+                if (!B.queue.empty()) { 
+                    B.evictOldest(); 
+                    evictions++; 
+                    freed = true; 
+                    cout << "VGC: Evicted from B\n" << flush;
+                }
+            }
+            if (freed) continue;
+            {
+                lock_guard<mutex> lg(R.mtx);
+                if (!R.queue.empty()) { 
+                    R.evictOldest(); 
+                    evictions++; 
+                    freed = true; 
+                    cout << "VGC: Evicted from R\n" << flush;
+                }
+            }
+            if (freed) continue;
+            {
+                lock_guard<mutex> lg(G.mtx);
+                if (!G.queue.empty()) { 
+                    G.evictOldest(); 
+                    evictions++; 
+                    freed = true; 
+                    cout << "VGC: Evicted from G\n" << flush;
+                }
+            }
+            if (!freed) {
+                cout << "VGC: Failed to allocate Obj id=" << id << ": No space after " << attempt << " attempts\n" << flush;
+                return nullptr;
+            }
+        }
+        cout << "VGC: Failed to allocate Obj id=" << id << ": Exceeded max attempts (" << max_attempts << ")\n" << flush;
+        return nullptr;
+    }
+
+    void access(shared_ptr<Obj> o) {
+        cout << "VGC: Entering access for Obj id=" << o->id << "\n" << flush;
+        int a = o->accesses.fetch_add(1) + 1;
+        o->checkpoint.store(1);
+        cout << "VGC: Accessing Obj id=" << o->id << ", accesses=" << a << "\n" << flush;
+        if (a == 5 && o->zoneBits != 2) promoteToGreen(o);
+    }
+
+    void promoteToGreen(shared_ptr<Obj> o) {
+        cout << "VGC: Entering promoteToGreen for Obj id=" << o->id << "\n" << flush;
+        Zone* fromZone = (o->zoneBits == 1) ? &R : &B;
+        unique_lock<mutex> lgFrom(fromZone->mtx, defer_lock);
+        unique_lock<mutex> lgG(G.mtx, defer_lock);
+        lock(lgFrom, lgG);
+        auto it = find_if(fromZone->queue.begin(), fromZone->queue.end(),
+            [&](shared_ptr<Obj> x){ return x->id == o->id; });
+        if (it != fromZone->queue.end()) {
+            cout << "VGC: Promoting Obj id=" << o->id << " from " << fromZone->name << " to G\n" << flush;
+            fromZone->used -= o->size;
+            fromZone->freeBitAddress(o->bitAddr);
+            fromZone->queue.erase(it);
+            G.allocate(o);
+            promotions++;
+            updatePeak();
+        } else {
+            cout << "VGC: Warning: Obj id=" << o->id << " not found in zone " << fromZone->name << "\n" << flush;
+        }
+        cout << "VGC: Exiting promoteToGreen for Obj id=" << o->id << "\n" << flush;
+    }
+
+    size_t totalUsed() {
+        cout << "VGC: Entering totalUsed\n" << flush;
+        unique_lock<mutex> lkr(R.mtx, defer_lock);
+        unique_lock<mutex> lkg(G.mtx, defer_lock);
+        unique_lock<mutex> lkb(B.mtx, defer_lock);
+        lock(lkr, lkg, lkb);
+        size_t total = R.used + G.used + B.used;
+        cout << "VGC: Total used: R=" << R.used << ", G=" << G.used << ", B=" << B.used << " (" << hr(total) << ")\n" << flush;
+        return total;
+    }
+
+    void updatePeak() {
+        cout << "VGC: Entering updatePeak\n" << flush;
+        size_t total = totalUsed();
+        size_t prev = peak_total.load();
+        while (total > prev && !peak_total.compare_exchange_weak(prev, total)) {}
+        cout << "VGC: Updated peak: " << hr(total) << "\n" << flush;
+    }
+
+    void printZoneStatus() {
+        cout << "VGC: Entering printZoneStatus\n" << flush;
+        auto printZone = [](const Zone &z) {
+            cout << z.name << "[";
+            for (auto &o : z.queue) cout << o->bitAddr << " ";
+            cout << "]\n" << flush;
+        };
+        lock_guard<mutex> lgR(R.mtx);
+        lock_guard<mutex> lgG(G.mtx);
+        lock_guard<mutex> lgB(B.mtx);
+        printZone(R); printZone(G); printZone(B);
+        cout << "VGC: Exiting printZoneStatus\n" << flush;
+    }
+};
+
+// -------------------- Config --------------------
+struct Config {
+    int numLoopObjs = 2; // Reduced for debugging
+    int numRecObjs = 0;
+    int numStrObjs = 0;
+    int accessThreads = 1;
+    int opsPerThread = 200;
+    size_t zoneCap = 512 * 1024; // 512 KB per zone
+};
+
+// -------------------- Simulation --------------------
+vector<tuple<int, int, string>> buildCatalog(const Config &c) {
+    cout << "VGC: Entering buildCatalog\n" << flush;
+    vector<tuple<int, int, string>> cat;
+    int id = 1;
+    for (int i = 0; i < c.numLoopObjs; i++) cat.emplace_back(id++, 32, "loop");
+    for (int i = 0; i < c.numRecObjs; i++) cat.emplace_back(id++, 1024, "recursion");
+    for (int i = 0; i < c.numStrObjs; i++) cat.emplace_back(id++, 256, "string");
+    cout << "VGC: Exiting buildCatalog with " << cat.size() << " objects\n" << flush;
+    return cat;
+}
+
+void run_vgc_sim(const Config &cfg) {
+    cout << "=== VGC Simulator ===\n" << flush;
+    VGC v(cfg.zoneCap, cfg.zoneCap, cfg.zoneCap);
+    auto catalog = buildCatalog(cfg);
+    vector<shared_ptr<Obj>> objs; 
+    objs.reserve(catalog.size());
+    cout << "Allocating " << catalog.size() << " objects...\n" << flush;
+
+    try {
+        for (auto &t : catalog) {
+            int id, sz; string k;
+            tie(id, sz, k) = t;
+            cout << "VGC: Attempting allocation for id=" << id << "\n" << flush;
+            auto obj = v.makeObject(id, sz, k);
+            if (!obj) { 
+                cout << "VGC: Failed to allocate object id=" << id << "\n" << flush; 
+                return; 
+            }
+            objs.push_back(obj);
+            cout << "VGC: Successfully pushed Obj id=" << id << " to objs\n" << flush;
+        }
+    } catch (const std::exception& e) {
+        cout << "VGC: Exception in allocation phase: " << e.what() << "\n" << flush;
+        return;
+    } catch (...) {
+        cout << "VGC: Unknown exception in allocation phase\n" << flush;
+        return;
+    }
+
+    cout << "Allocation complete. Objects allocated: " << objs.size() << "\n" << flush;
+
+    auto worker = [&](int seed) {
+        cout << "VGC: Starting worker with seed=" << seed << "\n" << flush;
+        mt19937 rng(seed);
+        uniform_int_distribution<size_t> dist(0, objs.size() - 1);
+        for (int i = 0; i < cfg.opsPerThread; i++) {
+            size_t idx = dist(rng);
+            v.access(objs[idx]);
+        }
+        cout << "VGC: Worker with seed=" << seed << " completed\n" << flush;
+    };
+
+    auto t0 = steady_clock::now();
+    cout << "Starting access phase...\n" << flush;
+    vector<thread> thr;
+    try {
+        for (int i = 0; i < cfg.accessThreads; i++) {
+            cout << "VGC: Launching thread " << i << "\n" << flush;
+            thr.emplace_back(worker, 1000 + i);
+        }
+        for (auto &th : thr) {
+            th.join();
+            cout << "VGC: Thread joined\n" << flush;
+        }
+    } catch (const std::exception& e) {
+        cout << "VGC: Exception in access phase: " << e.what() << "\n" << flush;
+        return;
+    } catch (...) {
+        cout << "VGC: Unknown exception in access phase\n" << flush;
+        return;
+    }
+    cout << "Access phase complete.\n" << flush;
+    auto t1 = steady_clock::now();
+
+    double elapsed = chrono::duration<double>(t1 - t0).count();
+    size_t total = v.totalUsed();
+    size_t peak = v.peak_total.load();
+    size_t promotions = v.promotions.load();
+    size_t evic = v.evictions.load();
+
+    cout << fixed << setprecision(7);
+    cout << "Time: " << elapsed << " s\n";
+    cout << "Total live memory: " << hr(total) << " (" << total << " bytes)\n";
+    cout << "Peak memory: " << hr(peak) << " (" << peak << " bytes)\n";
+    cout << "Promotions: " << promotions << "\n";
+    cout << "Evictions: " << evic << "\n" << flush;
+
+    cout << "\nZone Bit Address Status:\n";
+    v.printZoneStatus();
+    cout << "Done VGC sim\n" << flush;
+}
+
+// -------------------- Main --------------------
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cout << "VGC Simulation Benchmark\n\n" << flush;
+
+    Config cfg;
+    run_vgc_sim(cfg);
+    return 0;
+}
