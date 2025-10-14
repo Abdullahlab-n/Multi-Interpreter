@@ -1,4 +1,4 @@
-// Slave Arduino (VGC Memory Reporter)
+// Slave Arduino (VGC Memory Reporter) just for understanding intial stage prototype now it is outdated
 #include <Wire.h>
 
 #define SLAVE_ADDR 8
