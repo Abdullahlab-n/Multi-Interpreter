@@ -1,224 +1,319 @@
-//virtual garbage collector 2.0 code and output 
-#include <iostream>
-#include <vector>
-#include <memory>
-#include <unordered_map>
-#include <string>
-#include <cstdlib>
+// vgc_32b.cpp
+// 32-byte aligned VGC simulation (single-file)
+//follows Cpython rule 16 byte no exchange between the objects 
+// Compile: g++ -std=c++17 -O2 vgc_32b.cpp -o vgc_32b
 
+#include <bits/stdc++.h>
 using namespace std;
+using Clock = chrono::steady_clock;
 
-// === Object Structure ===
-struct Obj {
-    int id;
-    size_t size;
-    string kind;
-    string zone;
-    Obj(int i, size_t s, string k, string z = "")
-        : id(i), size(s), kind(std::move(k)), zone(std::move(z)) {}
-};
+// -------- Configuration --------
+struct Config {
+    size_t zone_capacity_bytes = 256 * 1024; // per zone
+    size_t max_objects_per_zone = 4096;      // pool size per zone
+    size_t promote_threshold = 5;            // accesses to promote
+    size_t epoch_interval_ops = 1000;        // how often to run checkpoint epoch
+    size_t loop_iterations = 10000;
+    size_t recursion_depth = 2000;
+    size_t random_ops = 5000;
+} cfg;
 
-// === Zone Class ===
-class Zone {
-public:
-    string name;
-    size_t capacity;
-    size_t used;
-    vector<shared_ptr<Obj>> queue;
-
-    Zone(string n, size_t c)
-        : name(std::move(n)), capacity(c), used(0) {
-        cout << "Initializing Zone " << name << " with capacity=" << capacity << endl;
-        cout.flush();
-    }
-
-    bool canAllocate(size_t s) {
-        bool ok = (used + s <= capacity);
-        cout << "Zone " << name << ": canAllocate(" << s << ") = " << (ok ? "true" : "false")
-             << ", used=" << used << ", capacity=" << capacity << endl;
-        cout.flush();
-        return ok;
-    }
-
-    bool allocate(const shared_ptr<Obj> &o) {
-        if (canAllocate(o->size)) {
-            used += o->size;
-            queue.push_back(o);
-            cout << "Zone " << name << ": Allocated Obj id=" << o->id << " size=" << o->size << endl;
-            cout.flush();
-            return true;
-        }
-        return false;
-    }
-
-    bool recycleCandidate(size_t s) {
-        cout << "Zone " << name << ": Entering recycleCandidate for size=" << s << endl;
-        cout.flush();
-        if (queue.empty()) {
-            cout << "Zone " << name << ": No recyclable candidate found for size=" << s << endl;
-            cout.flush();
-            return false;
-        }
-        for (auto it = queue.begin(); it != queue.end(); ++it) {
-            if ((*it)->size == s) {
-                used -= (*it)->size;
-                cout << "Zone " << name << ": Recycled Obj id=" << (*it)->id << endl;
-                cout.flush();
-                queue.erase(it);
-                return true;
-            }
-        }
-        cout << "Zone " << name << ": No matching size found for recycle" << endl;
-        cout.flush();
-        return false;
-    }
-
-    void summary() {
-        cout << "Zone " << name << " => Used: " << used << "/" << capacity
-             << " | Active Objects: " << queue.size() << endl;
-        cout.flush();
-    }
-};
-
-// === Virtual Garbage Collector (VGC) ===
-class VGC {
-public:
-    Zone R, G, B;
-    unordered_map<int, shared_ptr<Obj>> catalog;
-
-    VGC(size_t capR, size_t capG, size_t capB)
-        : R("R", capR), G("G", capG), B("B", capB) {
-        cout << "VGC: Initialized with R.cap=" << capR
-             << ", G.cap=" << capG << ", B.cap=" << capB << endl;
-        cout.flush();
-    }
-
-    void buildCatalog() {
-        cout << "VGC: Entering buildCatalog" << endl;
-        cout.flush();
-        catalog[1] = make_shared<Obj>(1, 32, "loop");
-        catalog[2] = make_shared<Obj>(2, 128, "data");
-        cout << "VGC: Exiting buildCatalog with " << catalog.size() << " objects" << endl;
-        cout.flush();
-    }
-
-    void makeObject(int id) {
-        if (catalog.find(id) == catalog.end()) {
-            cout << "VGC: Object id=" << id << " not found in catalog" << endl;
-            cout.flush();
-            return;
-        }
-
-        auto obj = catalog[id];
-        cout << "VGC: Attempting allocation for id=" << id << endl;
-        cout << "VGC: Entering makeObject for id=" << id << ", size=" << obj->size << ", kind=" << obj->kind << endl;
-        cout.flush();
-
-        if (!B.recycleCandidate(obj->size))
-            if (!R.recycleCandidate(obj->size))
-                if (G.canAllocate(obj->size)) {
-                    G.allocate(obj);
-                    obj->zone = "G";
-                }
-    }
-
-    void releaseObject(int id) {
-        if (catalog.find(id) == catalog.end()) return;
-        auto &obj = catalog[id];
-        cout << "VGC: Releasing Obj id=" << id << " from zone=" << obj->zone << endl;
-        cout.flush();
-        if (obj->zone == "G") {
-            G.recycleCandidate(obj->size);
-            obj->zone = "R";
-            R.allocate(obj);
-        }
-    }
-
-    void simulate() {
-        cout << "\nAllocating objects..." << endl;
-        cout.flush();
-        for (auto &kv : catalog) makeObject(kv.first);
-
-        cout << "\nReleasing and recycling objects..." << endl;
-        cout.flush();
-        for (auto &kv : catalog) releaseObject(kv.first);
-
-        cout << "\nFinal Summary:" << endl;
-        cout.flush();
-        R.summary();
-        G.summary();
-        B.summary();
-    }
-};
-
-// === Main Entry Point ===
-int main() {
-    cout << "\033[1;32mVGC Simulation Benchmark\033[0m" << endl;
-    cout << "\n=== VGC Simulator ===" << endl;
-    cout.flush();
-
-    VGC vgc(524288, 524288, 524288);
-    vgc.buildCatalog();
-    vgc.simulate();
-
-    cout << "\n=== Simulation Completed Successfully ===" << endl;
-    cout.flush();
-    return 0;
+// -------- Helper (hr) --------
+string hr(size_t bytes){
+    double b = (double)bytes;
+    const char* suf[] = {"B","KB","MB","GB"};
+    int i=0;
+    while(b>=1024.0 && i<3){ b/=1024.0; ++i; }
+    char buf[64];
+    snprintf(buf,sizeof(buf),"%.2f %s", b, suf[i]);
+    return string(buf);
 }
 
-      ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// -------- Compact, aligned object: 32 bytes --------
+// Layout chosen to be 32 bytes and alignas(16) for CPython-like alignment.
+// Fields:
+//  - uint64_t checkpoint;   // checkpoint bitfield (active/ref/zone/...)
+//  - uint64_t meta;         // id (upper bits), access counter (lower bits)
+//  - uint32_t size;         // payload size (simulated)
+//  - uint32_t kind;         // kind enum
+//  - uint8_t reserved[8];   // padding/reserved -> ensures total 32 bytes
+struct alignas(16) VGCObject {
+    uint64_t checkpoint;   // bits used by checkpoint system
+    uint64_t meta;         // high: id (40 bits), low: access counter (24 bits) etc
+    uint32_t size;         // simulated payload size (bytes)
+    uint32_t kind;         // 0=loop,1=recursion,2=string/other
+    uint8_t  reserved[8];  // padding to reach 32 bytes
 
-/*/
- output: 
- [?2004l
-[1;32mVGC Simulation Benchmark[0m
+    // ctor -- not strictly needed; pools will initialize later
+    VGCObject() : checkpoint(0), meta(0), size(0), kind(0) { memset(reserved,0,sizeof(reserved)); }
 
-=== VGC Simulator ===
-Initializing Zone R with capacity=524288
-Initializing Zone G with capacity=524288
-Initializing Zone B with capacity=524288
-VGC: Initialized with R.cap=524288, G.cap=524288, B.cap=524288
-VGC: Entering buildCatalog
-VGC: Exiting buildCatalog with 2 objects
+    // helpers
+    inline uint64_t id() const { return meta >> 24; }
+    inline uint32_t access_count() const { return (uint32_t)(meta & ((1ull<<24)-1)); }
+    inline void set_id(uint64_t new_id){ meta = ( (new_id << 24) | (meta & ((1ull<<24)-1)) ); }
+    inline void inc_access(){ uint64_t acc = access_count(); if(acc < (1u<<24)-1) meta = ( (meta & ~((1ull<<24)-1)) | (acc+1) ); }
+    inline void reset_access(){ meta &= ~((1ull<<24)-1); }
+    inline void clear(){ checkpoint = 0; meta = 0; size = 0; kind = 0; memset(reserved,0,sizeof(reserved)); }
+};
 
-Allocating objects...
-VGC: Attempting allocation for id=2
-VGC: Entering makeObject for id=2, size=128, kind=data
-Zone B: Entering recycleCandidate for size=128
-Zone B: No recyclable candidate found for size=128
-Zone R: Entering recycleCandidate for size=128
-Zone R: No recyclable candidate found for size=128
-Zone G: canAllocate(128) = true, used=0, capacity=524288
-Zone G: canAllocate(128) = true, used=0, capacity=524288
-Zone G: Allocated Obj id=2 size=128
-VGC: Attempting allocation for id=1
-VGC: Entering makeObject for id=1, size=32, kind=loop
-Zone B: Entering recycleCandidate for size=32
-Zone B: No recyclable candidate found for size=32
-Zone R: Entering recycleCandidate for size=32
-Zone R: No recyclable candidate found for size=32
-Zone G: canAllocate(32) = true, used=128, capacity=524288
-Zone G: canAllocate(32) = true, used=128, capacity=524288
-Zone G: Allocated Obj id=1 size=32
+// Static assert to ensure size and alignment
+static_assert(sizeof(VGCObject) == 32, "VGCObject must be 32 bytes");
+static_assert(alignof(VGCObject) >= 16, "VGCObject must be 16-byte aligned");
 
-Releasing and recycling objects...
-VGC: Releasing Obj id=2 from zone=G
-Zone G: Entering recycleCandidate for size=128
-Zone G: Recycled Obj id=2
-Zone R: canAllocate(128) = true, used=0, capacity=524288
-Zone R: Allocated Obj id=2 size=128
-VGC: Releasing Obj id=1 from zone=G
-Zone G: Entering recycleCandidate for size=32
-Zone G: Recycled Obj id=1
-Zone R: canAllocate(32) = true, used=128, capacity=524288
-Zone R: Allocated Obj id=1 size=32
+// -------- Zone (pool-based, no relocation) --------
+struct Zone {
+    string name;
+    size_t capacity_bytes;
+    vector<VGCObject> pool;       // actual objects (fixed capacity)
+    vector<VGCObject*> free_list; // pointers to available objects
+    vector<VGCObject*> active;    // active objects in this zone
+    size_t used_bytes = 0;
 
-Final Summary:
-Zone R => Used: 160/524288 | Active Objects: 2
-Zone G => Used: 0/524288 | Active Objects: 0
-Zone B => Used: 0/524288 | Active Objects: 0
+    Zone() = default;
+    Zone(const string &n, size_t cap, size_t max_objs) : name(n), capacity_bytes(cap) {
+        pool.resize(max_objs);
+        free_list.reserve(max_objs);
+        active.reserve(max_objs/4);
+        // initialize free_list with all pool addresses
+        for(size_t i=0;i<pool.size();++i){
+            pool[i].clear();
+            free_list.push_back(&pool[i]);
+        }
+    }
 
-=== Simulation Completed Successfully ===
-[?2004h
- 
-      /*/
+    // attempt allocate: returns pointer or nullptr
+    VGCObject* allocate(uint64_t global_id, uint32_t sz, uint32_t kind){
+        if(sz + used_bytes > capacity_bytes) return nullptr; // not enough capacity
+        if(free_list.empty()){
+            // try to reclaim idle objects (access==0 and checkpoint shows inactive)
+            reap_idle();
+            if(free_list.empty()) return nullptr;
+        }
+        VGCObject* o = free_list.back(); free_list.pop_back();
+        o->clear();
+        o->set_id(global_id);
+        o->size = sz;
+        o->kind = kind;
+        // set zone bits in checkpoint: we'll use bits 2/3/4 for R/G/B respectively
+        if(name == "R") o->checkpoint |= (1ull<<2);
+        else if(name == "G") o->checkpoint |= (1ull<<3);
+        else if(name == "B") o->checkpoint |= (1ull<<4);
+        // mark as active once allocated
+        o->checkpoint |= 1ull<<0; // active bit
+        used_bytes += sz;
+        active.push_back(o);
+        return o;
+    }
+
+    void release(VGCObject* o){
+        if(!o) return;
+        // clear active bit and keep metadata for possible recycling
+        o->checkpoint &= ~(1ull<<0);
+        // remove from active list (linear - fine for demo; could be optimized)
+        auto it = find(active.begin(), active.end(), o);
+        if(it != active.end()) active.erase(it);
+        // reclaimed later by reap_idle or immediate recycle if flagged
+    }
+
+    // reclaim objects with checkpoint inactive & access_count == 0
+    void reap_idle(){
+        // scan active list for idle candidates and move to free_list
+        // we do a reverse scan to erase safely
+        for(int i=(int)active.size()-1;i>=0;--i){
+            VGCObject* o = active[i];
+            bool active_bit = (o->checkpoint & (1ull<<0)) != 0;
+            // also check "protected" bit (bit 6) - do not reclaim if protected
+            bool protected_bit = (o->checkpoint & (1ull<<6)) != 0;
+            if(!active_bit && (o->access_count() == 0) && !protected_bit){
+                used_bytes -= o->size;
+                o->clear();
+                free_list.push_back(o);
+                active.erase(active.begin()+i);
+            }
+        }
+    }
+
+    size_t count_active() const { return active.size(); }
+};
+
+// -------- Node (Primary / Secondary) --------
+struct Node {
+    string name;
+    Zone R, G, B;
+    uint64_t next_id = 1;
+    // checkpoint snapshots (two consecutive epochs) as simple vectors of uint64_t per object slot
+    // For demo simplicity, we snapshot per active list order combined across zones
+    vector<uint64_t> snapshot_prev;
+    vector<uint64_t> snapshot_curr;
+
+    Node() = default;
+    Node(const string &n, size_t zone_cap, size_t max_objs_per_zone) : name(n) {
+        R = Zone("R", zone_cap, max_objs_per_zone);
+        G = Zone("G", zone_cap, max_objs_per_zone);
+        B = Zone("B", zone_cap, max_objs_per_zone);
+    }
+
+    // pick zone by heuristic kind
+    Zone* choose_zone(uint32_t kind){
+        // 0=loop/hot -> Green
+        // 1=recursion/heavy -> Red
+        // 2=string/other -> Blue
+        if(kind == 0) return &G;
+        if(kind == 1) return &R;
+        return &B;
+    }
+
+    VGCObject* allocate_object(uint32_t sz, uint32_t kind){
+        VGCObject* o = nullptr;
+        Zone* z = choose_zone(kind);
+        o = z->allocate(next_id++, sz, kind);
+        // if couldn't allocate there, try other zones (recycling)
+        if(!o){
+            // try B then R then G
+            if(z != &B) o = B.allocate(next_id++, sz, kind);
+            if(!o && z != &R) o = R.allocate(next_id++, sz, kind);
+            if(!o && z != &G) o = G.allocate(next_id++, sz, kind);
+        }
+        return o;
+    }
+
+    // simulate accessing object: set active bit and inc access counter
+    void access_object(VGCObject* o){
+        if(!o) return;
+        o->checkpoint |= (1ull<<0); // set active bit
+        o->inc_access();
+        // if access_count passes threshold, set promoted flag (bit1)
+        if(o->access_count() >= cfg.promote_threshold) o->checkpoint |= (1ull<<1);
+    }
+
+    // snapshot checkpoints across zones into snapshot_curr (ordered)
+    void snapshot_epoch(){
+        snapshot_prev = snapshot_curr;
+        snapshot_curr.clear();
+        snapshot_curr.reserve(R.count_active() + G.count_active() + B.count_active());
+        for(auto &o : R.active) snapshot_curr.push_back(o->checkpoint);
+        for(auto &o : G.active) snapshot_curr.push_back(o->checkpoint);
+        for(auto &o : B.active) snapshot_curr.push_back(o->checkpoint);
+    }
+
+    // compute diff (= XOR prev ^ curr) and mark unchanged slots for potential recycle
+    // For demo, we treat "unchanged in the same slot index" as candidate (real impl uses address-based map)
+    void analyze_epoch_and_recycle(){
+        size_t n = min(snapshot_prev.size(), snapshot_curr.size());
+        for(size_t i=0;i<n;++i){
+            uint64_t diff = snapshot_prev[i] ^ snapshot_curr[i];
+            if(diff == 0){
+                // unchanged between epochs -> candidate for recycle
+                // In this simplified simulation we won't map back to exact object pointer
+                // Instead, trigger zone.reap_idle to let inactive ones be reclaimed
+            }
+        }
+        // Let each zone perform idle reclaim based on checkpoint & access count
+        R.reap_idle();
+        G.reap_idle();
+        B.reap_idle();
+    }
+
+    size_t total_used_bytes() const { return R.used_bytes + G.used_bytes + B.used_bytes; }
+    size_t total_capacity() const { return R.capacity_bytes + G.capacity_bytes + B.capacity_bytes; }
+    void print_summary() const {
+        cout << "Node " << name << " summary:\n";
+        cout << "  Red used:   " << hr(R.used_bytes) << " (" << R.used_bytes << " bytes) | active=" << R.count_active() << "\n";
+        cout << "  Green used: " << hr(G.used_bytes) << " (" << G.used_bytes << " bytes) | active=" << G.count_active() << "\n";
+        cout << "  Blue used:  " << hr(B.used_bytes) << " (" << B.used_bytes << " bytes) | active=" << B.count_active() << "\n";
+        cout << "  Total used: " << hr(total_used_bytes()) << " / " << hr(total_capacity()) << "\n";
+    }
+};
+
+// -------- Simple Simulation Workloads --------
+void run_loop_workload(Node &node){
+    cout << "== Loop workload: " << cfg.loop_iterations << " iterations ==\n";
+    for(size_t i=1;i<=cfg.loop_iterations;i++){
+        auto *o = node.allocate_object(32, 0); // hot / loop -> G
+        node.access_object(o);
+        if(i % cfg.epoch_interval_ops == 0){
+            node.snapshot_epoch();
+            node.analyze_epoch_and_recycle();
+        }
+    }
+    node.snapshot_epoch();
+    node.analyze_epoch_and_recycle();
+}
+
+void run_recursion_workload(Node &node){
+    cout << "== Recursion workload: depth " << cfg.recursion_depth << " ==\n";
+    vector<VGCObject*> stack;
+    stack.reserve(min<size_t>(cfg.recursion_depth, 200000));
+    for(size_t i=1;i<=cfg.recursion_depth;i++){
+        auto *o = node.allocate_object(128, 1); // recursion -> R
+        node.access_object(o);
+        stack.push_back(o);
+        if(i % cfg.epoch_interval_ops == 0){
+            node.snapshot_epoch();
+            node.analyze_epoch_and_recycle();
+        }
+    }
+    // unwind: release references (simulate frames returning)
+    for(size_t i=0;i<stack.size();++i){
+        VGCObject* o = stack[i];
+        // mark inactive (clear active bit) to allow reclaim
+        if(o) o->checkpoint &= ~(1ull<<0);
+        if(i % 10000 == 0){
+            node.snapshot_epoch();
+            node.analyze_epoch_and_recycle();
+        }
+    }
+    node.snapshot_epoch();
+    node.analyze_epoch_and_recycle();
+}
+
+void run_random_stress(Node &node){
+    cout << "== Random stress: ops " << cfg.random_ops << " ==\n";
+    mt19937 rng(1337);
+    uniform_int_distribution<int> szdist(16, 2048);
+    vector<VGCObject*> buf;
+    buf.reserve(10000);
+    for(size_t i=1;i<=cfg.random_ops;i++){
+        int sz = szdist(rng);
+        uint32_t kind = (sz < 64) ? 0 : ((sz > 800) ? 1 : 2);
+        auto *o = node.allocate_object((uint32_t)sz, kind);
+        node.access_object(o);
+        buf.push_back(o);
+        if(buf.size() > 10000) buf.erase(buf.begin(), buf.begin()+1000);
+        if(i % cfg.epoch_interval_ops == 0){
+            node.snapshot_epoch();
+            node.analyze_epoch_and_recycle();
+        }
+    }
+    buf.clear();
+    node.snapshot_epoch();
+    node.analyze_epoch_and_recycle();
+}
+
+// -------- Main / driver --------
+int main(){
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+    cout << "VGC 32-byte aligned simulation (single-node demo)\n\n";
+
+    // Tuned smaller numbers for interactive runs; adjust cfg above as needed
+    // cfg.loop_iterations = 10000;
+    // cfg.recursion_depth = 2000;
+    // cfg.random_ops = 5000;
+
+    Node primary("Primary", cfg.zone_capacity_bytes, cfg.max_objects_per_zone);
+
+    auto t0 = Clock::now();
+    run_loop_workload(primary);
+    run_recursion_workload(primary);
+    run_random_stress(primary);
+    auto t1 = Clock::now();
+
+    double elapsed = chrono::duration<double>(t1 - t0).count();
+    cout << "\n=== Simulation Results ===\n";
+    cout << "Elapsed time: " << elapsed << " s\n";
+    primary.print_summary();
+
+    cout << "\nDone.\n";
+    return 0;
+}
