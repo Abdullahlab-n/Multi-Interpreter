@@ -317,3 +317,20 @@ int main(){
     cout << "\nDone.\n";
     return 0;
 }
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+output:                                                         //Key Important Note is this test run Without JIT / AOT Optimisaction 
+VGC 32-byte aligned simulation (single-node demo)
+
+== Loop workload: 10000 iterations ==
+== Recursion workload: depth 2000 ==
+== Random stress: ops 5000 ==
+
+=== Simulation Results ===
+Elapsed time: 0.595591 s
+Node Primary summary:
+  Red used:   256.00 KB (262144 bytes) | active=3404
+  Green used: 128.00 KB (131072 bytes) | active=4096
+  Blue used:  128.00 KB (131072 bytes) | active=4096
+  Total used: 512.00 KB / 768.00 KB
+
+Done.
