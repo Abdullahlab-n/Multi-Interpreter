@@ -1,4 +1,4 @@
-// Master Arduino (VGC Controller)
+// Master Arduino (VGC Controller) just for understanding intial stage prototype now it is outdated
 #include <Wire.h>
 
 #define SLAVE_ADDR 8
